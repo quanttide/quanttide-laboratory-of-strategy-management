@@ -1,0 +1,66 @@
+{
+  "strategy_source": "../../../data/profile/strategy/index.json",
+  "hypotheses": [
+    {
+      "statement": "公司方向: 从项目制服务转型产品制服务（PaaS 云厂商）",
+      "source": "公司战略",
+      "type": "external",
+      "status": "proposed",
+      "risk": "一方面必须做项目养活自己、积累客户和案例；另一方面必须自研平台封装日益复杂的业务流程。",
+      "counterfactual": "",
+      "signals_to_watch": [],
+      "depends_on": [],
+      "created_at": "2026-07-08T12:11:24.085903",
+      "updated_at": "2026-07-08T12:11:24.085921"
+    },
+    {
+      "statement": "量潮数据: 增长瓶颈在于讲清楚我们能做什么。规范程度和交付能力已获客户认可，难点在于增加获客能力和技术供给，让技术管理能力形成规模效应，突破规模化临界点。",
+      "source": "量潮数据",
+      "type": "external",
+      "status": "proposed",
+      "risk": "公开案例库已纳入排期；全周同时推进客户边界建立、交付流程透明化和数据安全方案",
+      "counterfactual": "",
+      "signals_to_watch": [],
+      "depends_on": [],
+      "created_at": "2026-07-08T12:11:24.085926",
+      "updated_at": "2026-07-08T12:11:24.085928"
+    },
+    {
+      "statement": "量潮课堂: 需确立围绕企业培训的模式。已有浙理定制微专业经验可迁移，但新商业模式尚未跑通。",
+      "source": "量潮课堂",
+      "type": "external",
+      "status": "proposed",
+      "risk": "方向已收敛到团体/企业培训（高校半价、企业全价），但未排入执行",
+      "counterfactual": "",
+      "signals_to_watch": [],
+      "depends_on": [],
+      "created_at": "2026-07-08T12:11:24.085931",
+      "updated_at": "2026-07-08T12:11:24.085932"
+    },
+    {
+      "statement": "量潮咨询: 客户谈判周期长，需求五花八门，决策压力大。",
+      "source": "量潮咨询",
+      "type": "external",
+      "status": "proposed",
+      "risk": "策略转型中：放弃合作方/盟友依赖，转向自建获客和积累项目方案",
+      "counterfactual": "",
+      "signals_to_watch": [],
+      "depends_on": [],
+      "created_at": "2026-07-08T12:11:24.085935",
+      "updated_at": "2026-07-08T12:11:24.085936"
+    },
+    {
+      "statement": "量潮云: 研发投入巨大，当前以降级为内源项目为目标——统一各业务标准，让数据案例进课程、课程成果支持数据。",
+      "source": "量潮云",
+      "type": "external",
+      "status": "proposed",
+      "risk": "DevOps CLI v0.10.0 已发布，10+ 文档仓库已完善。已超越内源阶段，正探索外部贡献者模式和开源共建",
+      "counterfactual": "",
+      "signals_to_watch": [],
+      "depends_on": [],
+      "created_at": "2026-07-08T12:11:24.085938",
+      "updated_at": "2026-07-08T12:11:24.085939"
+    }
+  ],
+  "evidence": []
+}
