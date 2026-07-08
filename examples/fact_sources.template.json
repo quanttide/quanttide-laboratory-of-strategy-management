@@ -6,7 +6,7 @@
   },
   {
     "label": "外部-quanttide-tech",
-    "path": "../../../default/quanttide-tech/data/journal",
+    "path": "../../../../../default/quanttide-tech/data/journal",
     "private": false
   }
 ]
