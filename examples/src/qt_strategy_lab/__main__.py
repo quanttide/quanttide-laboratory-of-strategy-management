@@ -2,18 +2,22 @@
 """QT Strategy Lab — CLI 入口"""
 
 import json
-import re
 import sys
+import textwrap
 from pathlib import Path
 
-from qt_strategy_lab import (
-    Hypothesis,
-    HypothesisStatus,
+from quanttide_agent import LLM
+from quanttide_agent.config import settings
+
+from qt_strategy_lab import Hypothesis, HypothesisStatus
+
+LLM_CLIENT = LLM(
+    model=settings.llm_model or "deepseek-chat",
+    base_url=settings.llm_base_url,
+    api_key=settings.llm_api_key,
 )
 
 # ── 路径约定 ─────────────────────────────────────────────
-# 从 examples/default/examples/ 目录运行
-# 到量化战略根目录: ../../.. (examples/default → quanttide-strategy)
 PARENT = Path(__file__).resolve().parents[2].joinpath("..", "..", "..").resolve()
 PROFILE_ENV = PARENT / "data" / "profile" / "environment" / "index.json"
 JOURNAL_ENV = PARENT / "data" / "journal" / "environment"
@@ -27,7 +31,6 @@ def _load_json(path: Path) -> dict:
 
 
 def _latest_journal(dir_path: Path) -> str:
-    """取一个 journal 目录下最新的 .md 内容"""
     if not dir_path.exists():
         return ""
     files = sorted(dir_path.glob("*.md"), reverse=True)
@@ -36,29 +39,29 @@ def _latest_journal(dir_path: Path) -> str:
     return files[0].read_text()
 
 
-def _keyword_overlap(text: str, candidates: list[str]) -> list[str]:
-    """基于关键词重叠找到关联的环境信号"""
-    text_lower = text.lower()
-    matched = []
-    for c in candidates:
-        # 中文分词：用标点和空格拆，然后提 2-4 字的关键子串
-        parts = re.split(r"[，。,.:、\s]+", c.lower())
-        ngrams = set()
-        for p in parts:
-            chars = list(p)
-            for i in range(len(chars)):
-                for j in range(i + 2, min(i + 5, len(chars) + 1)):
-                    ngrams.add("".join(chars[i:j]))
-        if any(ng in text_lower for ng in ngrams):
-            matched.append(c)
-    return matched
+def _llm(prompt: str, max_tokens: int = 2000) -> str:
+    resp = LLM_CLIENT.complete(prompt, temperature=0.2, max_tokens=max_tokens)
+    return resp.content.strip()
+
+
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n", 1)
+        text = lines[1] if len(lines) > 1 else text
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
 
 
 # ── 命令 ──────────────────────────────────────────────────
 
 
 def cmd_new(strategy_path: str):
-    """从 profile/strategy/index.json 加载假设"""
     path = Path(strategy_path)
     if not path.exists():
         print(f"文件不存在: {strategy_path}")
@@ -110,10 +113,10 @@ def cmd_new(strategy_path: str):
 
 
 def cmd_enrich():
-    """从 profile/environment/index.json 自动关联环境信号到假设"""
+    """LLM 自动关联环境信号到假设"""
     result_path = Path("results") / "hypotheses.json"
     if not result_path.exists():
-        print("请先运行 new 生成 hypotheses.json")
+        print("请先运行 new")
         return
 
     data = json.loads(result_path.read_text())
@@ -122,45 +125,56 @@ def cmd_enrich():
         print(f"环境文件不存在: {PROFILE_ENV}")
         return
 
-    # 收集所有环境信号
+    # 收集环境信号
     signals = []
-    internal = env.get("internal", {})
-    external = env.get("external", {})
+    for bl in env.get("internal", {}).get("businessLines", []):
+        if bl.get("constraint"):
+            signals.append(f"内部-{bl['name']}: {bl['constraint']}")
+    for m in env.get("external", {}).get("market", []):
+        if m.get("characteristic"):
+            signals.append(f"外部-{m['dimension']}: {m['characteristic']}")
+    for s in env.get("signals", []):
+        signals.append(f"信号-{s.get('observation', '')}: {s.get('implication', '')}")
 
-    for bl in internal.get("businessLines", []):
-        signals.append(bl.get("constraint", ""))
+    signal_text = "\n".join(f"  [{i}] {s}" for i, s in enumerate(signals))
 
-    for m in external.get("market", []):
-        signals.append(m.get("characteristic", ""))
-
-    signals = [s for s in signals if s]
-
-    # 逐条假设匹配
-    matched_count = 0
     for h in data["hypotheses"]:
-        text = f"{h['statement']} {h['risk']}"
-        deps = _keyword_overlap(text, signals)
-        if deps:
-            h["depends_on"] = deps
-            matched_count += 1
+        hyps_text = f"假设: {h['statement']}\n来源: {h['source']}\n风险: {h['risk']}"
+        prompt = f"""判断以下假设依赖哪些环境信号（可多选或不选）。
+
+输出格式: JSON 数组，如 [0, 2]，表示依赖信号列表中索引 0 和 2 的信号。一个都不依赖则输出 []。
+
+假设:
+{hyps_text}
+
+可选的环境信号:
+{signal_text}"""
+        try:
+            resp = _llm(prompt, max_tokens=500)
+            indices = _parse_json(resp)
+            if isinstance(indices, list):
+                deps = [signals[i] for i in indices if i < len(signals)]
+                h["depends_on"] = deps
+                if deps:
+                    print(f"  [{h['source']}] 依赖 {len(deps)} 个信号")
+                    for d in deps:
+                        print(f"      {d[:60]}")
+        except Exception as e:
+            print(f"  [{h['source']}] 跳过 ({e})")
 
     result_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    print(f"已关联 {matched_count}/{len(data['hypotheses'])} 条假设到环境信号")
-    for h in data["hypotheses"]:
-        if h["depends_on"]:
-            print(f"  [{h['source']}] 依赖: {', '.join(h['depends_on'])}")
+    print(f"\n已更新 {len(data['hypotheses'])} 条假设的环境依赖")
 
 
 def cmd_check():
-    """从 journal/environment 和 journal/default 的最新日志找证据"""
+    """LLM 从日志发现证据"""
     result_path = Path("results") / "hypotheses.json"
     if not result_path.exists():
-        print("请先运行 new 生成 hypotheses.json")
+        print("请先运行 new")
         return
 
     data = json.loads(result_path.read_text())
 
-    # 读最新的环境日志和默认日志
     env_text = _latest_journal(JOURNAL_ENV)
     default_text = _latest_journal(JOURNAL_DEFAULT)
     combined = f"{env_text}\n\n{default_text}"
@@ -168,51 +182,51 @@ def cmd_check():
         print("未找到 journal 数据")
         return
 
-    # 关键词匹配：每条假设在日志中找相关段落
-    evidence = []
+    journal_snippet = combined[:6000]
+
     for i, h in enumerate(data["hypotheses"]):
-        text = h["statement"]
-        words = [w for w in re.findall(r"[\w\u4e00-\u9fff]+", text) if len(w) > 1]
-        if not words:
-            continue
+        prompt = f"""你是事实校验分析师。下面是一条战略假设和公司日志。请判断日志中是否有证据支持或挑战这个假设。
 
-        # 在日志中找包含这些词的段落
-        relevant = []
-        for line in combined.split("\n"):
-            line_lower = line.lower()
-            if any(w.lower() in line_lower for w in words[:5]):
-                relevant.append(line.strip())
+输出 JSON:
+{{"supporting": "支持证据的原文片段（如果没有就留空）", "challenging": "挑战证据的原文片段（如果没有就留空）", "verdict": "confirmed|rejected|no_evidence|evidence_with_difficulty", "reason": "一句话说明判断理由"}}
 
-        if relevant:
-            evidence.append(
-                {
-                    "hypothesis_index": i,
-                    "hypothesis_statement": h["statement"],
-                    "supporting": "\n".join(relevant[:3]),
-                    "challenging": "",
-                }
-            )
+假设: {h["statement"]}
+来源: {h["source"]}
 
-    data["evidence"] = evidence
-
-    # 更新假设状态
-    for e in evidence:
-        for h in data["hypotheses"]:
-            if h["statement"] == e["hypothesis_statement"]:
-                if e["supporting"]:
-                    h["status"] = "evidence_with_difficulty"
-                break
+公司日志:
+{journal_snippet}"""
+        try:
+            resp = _llm(prompt, max_tokens=1000)
+            result = _parse_json(resp)
+            if result:
+                h["status"] = result.get("verdict", h.get("status", "proposed"))
+                data["evidence"].append(
+                    {
+                        "hypothesis_index": i,
+                        "hypothesis_statement": h["statement"],
+                        "supporting": result.get("supporting", ""),
+                        "challenging": result.get("challenging", ""),
+                        "reason": result.get("reason", ""),
+                    }
+                )
+                icon = {
+                    "confirmed": "✓",
+                    "rejected": "✗",
+                    "evidence_with_difficulty": "△",
+                    "no_evidence": "?",
+                }.get(result.get("verdict", ""), "?")
+                print(
+                    f"  {icon} [{result.get('verdict', '?')}] {h['source']}: {result.get('reason', '')[:50]}"
+                )
+        except Exception as e:
+            print(f"  ✗ [{h['source']}] 跳过 ({e})")
 
     result_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    print(f"从 journal 找到 {len(evidence)}/{len(data['hypotheses'])} 条假设的相关证据")
-    for e in evidence:
-        idx = e["hypothesis_index"]
-        print(f"\n  [{idx}] {e['hypothesis_statement'][:50]}...")
-        print(f"      证据片段: {e['supporting'][:80]}...")
+    n = len(data["evidence"])
+    print(f"\n已更新 {n} 条证据记录")
 
 
 def cmd_status():
-    """查看当前假设校验状态"""
     result_path = Path("results") / "hypotheses.json"
     if not result_path.exists():
         print("请先运行 new")
@@ -229,7 +243,7 @@ def cmd_status():
             "proposed": " ",
         }.get(h.get("status", ""), "?")
         deps = h.get("depends_on", [])
-        dep_str = f" 依赖: {', '.join(deps)}" if deps else ""
+        dep_str = f"  依赖: {len(deps)} 个环境信号" if deps else ""
         print(
             f"  {icon} [{h.get('status', '?')}] {h['source']}: {h['statement'][:50]}...{dep_str}"
         )
@@ -245,9 +259,10 @@ def cmd_help():
 
 命令:
   new <json路径>    从 profile/strategy/index.json 加载假设
-  enrich           自动关联环境信号到假设（从 profile/environment/）
-  check            从 journal 最新日志发现证据
+  enrich           LLM 自动关联环境信号到假设
+  check            LLM 从 journal 最新日志发现证据
   status           查看当前假设状态
+  reset            清空 results/
   help             显示帮助
 """)
 
@@ -269,6 +284,13 @@ def main():
         cmd_check()
     elif cmd == "status":
         cmd_status()
+    elif cmd == "reset":
+        import shutil
+
+        p = Path("results")
+        if p.exists():
+            shutil.rmtree(p)
+            print("已重置")
     else:
         cmd_help()
 
