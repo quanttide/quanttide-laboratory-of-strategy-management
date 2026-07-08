@@ -18,17 +18,34 @@ LLM_CLIENT = LLM(
 
 # ── 根目录 ────────────────────────────────────────────────
 QT_ROOT = Path(__file__).resolve().parents[2].joinpath("..", "..", "..").resolve()
-QT_TECH = QT_ROOT.parent.parent / "default" / "quanttide-tech"  # 外部事实源
 
 # 本仓库 profile（待核验的断言）
 PROFILE_STRATEGY = QT_ROOT / "data" / "profile" / "strategy" / "index.json"
 PROFILE_ENV = QT_ROOT / "data" / "profile" / "environment" / "index.json"
 
-# 日志事实源（本仓库 + 外部仓库）
-FACT_SOURCES = [
-    ("本仓库-journal", QT_ROOT / "data" / "journal"),
-    ("外部-quanttide-tech", QT_TECH / "data" / "journal"),
-]
+# 事实源配置（从文件读，不硬编码）
+FACT_SOURCES_PATH = Path(__file__).resolve().parent.parent.parent / "fact_sources.json"
+
+
+def _load_fact_sources() -> list[dict]:
+    """从配置文件读事实源清单"""
+    if not FACT_SOURCES_PATH.exists():
+        print(f"事实源配置文件不存在: {FACT_SOURCES_PATH}")
+        return []
+    raw = json.loads(FACT_SOURCES_PATH.read_text())
+    sources = []
+    for item in raw:
+        # 路径相对于配置文件所在目录解析
+        ref = FACT_SOURCES_PATH.parent / item["path"]
+        resolved = ref.resolve() if ref.exists() else ref
+        sources.append(
+            {
+                "label": item["label"],
+                "path": resolved,
+                "private": item.get("private", False),
+            }
+        )
+    return sources
 
 
 def _load_json(path: Path) -> dict:
@@ -56,28 +73,46 @@ def _parse_json(text: str) -> dict | list:
         return {}
 
 
-def _all_journal_text() -> str:
-    """从所有事实源收集 journal 文本"""
+def _all_journal_text(sources: list[dict]) -> str:
+    """从事实源收集 journal 文本"""
     texts = []
-    for label, path in FACT_SOURCES:
-        if not path.exists():
+    for s in sources:
+        if not s["path"].exists():
             continue
-        for sub in sorted(path.iterdir()):
+        for sub in sorted(s["path"].iterdir()):
             if not sub.is_dir() or sub.name.startswith("."):
                 continue
-            files = sorted(sub.glob("*.md"), reverse=True)[:3]  # 每个目录最近 3 篇
+            files = sorted(sub.glob("*.md"), reverse=True)[:3]
             for f in files:
-                texts.append(f"\n=== {label}/{sub.name}/{f.stem} ===\n{f.read_text()}")
+                tag = "🔒" if s["private"] else ""
+                texts.append(
+                    f"\n=== {tag}{s['label']}/{sub.name}/{f.stem} ===\n{f.read_text()}"
+                )
     return "\n".join(texts)
 
 
 # ── 命令 ──────────────────────────────────────────────────
 
 
-def cmd_verify():
+def cmd_verify(public_only: bool = False):
     """读 profile/ 战略断言 → 生成核验清单 → 到外部事实源找证据"""
     strategy = _load_json(PROFILE_STRATEGY)
     env = _load_json(PROFILE_ENV)
+    all_sources = _load_fact_sources()
+
+    if not all_sources:
+        return
+
+    # 过滤：只用公开源，还是全部用
+    sources = [s for s in all_sources if not public_only or not s["private"]]
+    if public_only:
+        active = [s for s in sources if not s["private"]]
+    else:
+        active = sources
+
+    print(f"事实源: {len(active)} 个 ({'仅公开' if public_only else '含私有'})")
+    for s in active:
+        print(f"  {'🔒' if s['private'] else '  '} {s['label']}: {s['path']}")
 
     # 1. 收集所有需要核验的战略断言
     assertions = []
@@ -110,34 +145,30 @@ def cmd_verify():
             }
         )
 
-    # 2. 生成核验清单——每条断言需要找什么证据
-    print(f"共 {len(assertions)} 条战略断言需要核验")
-    print("生成核验清单...")
+    print(f"\n共 {len(assertions)} 条战略断言需要核验")
 
-    verify_plan_prompt = f"""下面是公司的战略断言清单。对每条断言，生成一个"核验条目"——到外部事实源（各业务线日志）中要找什么证据来验证它。
+    # 2. 生成核验清单
+    print("生成核验清单...")
+    plan_prompt = f"""下面是公司的战略断言清单。对每条断言，生成核验条目——到各业务线日志中要找什么具体的证据（行为/数据/事件）来验证它。
 
 输出 JSON 数组:
-[{{"source": "来源", "assertion": "断言原文", "what_to_look_for": "到日志中找什么具体的证据（行为/数据/事件）才能确认或挑战这条断言", "key_signals": ["关注的关键信号词"]}}]
+[{{"source": "来源", "assertion": "断言原文", "what_to_look_for": "找什么", "key_signals": ["关注的关键信号词"]}}]
 
-战略断言:
 {json.dumps(assertions, ensure_ascii=False, indent=2)}"""
 
     try:
-        plan = _parse_json(_llm(verify_plan_prompt, max_tokens=3000))
+        plan = _parse_json(_llm(plan_prompt, max_tokens=3000))
         if isinstance(plan, dict):
             plan = [plan]
-    except Exception:
-        plan = []
-
-    if not plan:
-        print("生成核验清单失败")
+    except Exception as e:
+        print(f"生成核验清单失败: {e}")
         return
 
     print(f"已生成 {len(plan)} 条核验条目\n")
 
     # 3. 收集事实源文本
     print("收集外部事实源...")
-    fact_text = _all_journal_text()
+    fact_text = _all_journal_text(active)
     print(f"共 {len(fact_text)} 字符\n")
 
     if not fact_text.strip():
@@ -154,7 +185,7 @@ def cmd_verify():
         prompt = f"""你是事实校验分析师。下面是一条战略断言和核验指引。请从事实源里找相关证据。
 
 输出 JSON:
-{{"source": "来源", "assertion": "断言原文", "supporting": "支持证据的原文片段（引用具体内容，无则空）", "challenging": "挑战证据的原文片段（引用具体内容，无则空）", "verdict": "confirmed|rejected|evidence_with_difficulty|no_evidence", "reason": "一句话判断理由", "found_in": ["找到证据的文件路径"]}}
+{{"verdict": "confirmed|rejected|evidence_with_difficulty|no_evidence", "reason": "一句话判断理由（不含原文引用，只写判断结论）"}}
 
 战略断言: {assertion}
 来源: {source}
@@ -162,10 +193,13 @@ def cmd_verify():
 
 事实源:
 {fact_text[:8000]}"""
+
         try:
-            resp = _llm(prompt, max_tokens=1500)
+            resp = _llm(prompt, max_tokens=1000)
             r = _parse_json(resp)
             if isinstance(r, dict) and r.get("verdict"):
+                r["source"] = source
+                r["assertion"] = assertion
                 results.append(r)
                 icon = {
                     "confirmed": "✓",
@@ -173,15 +207,17 @@ def cmd_verify():
                     "evidence_with_difficulty": "△",
                     "no_evidence": "?",
                 }.get(r.get("verdict", ""), "?")
-                print(f"  {icon} [{r['verdict']}] {source}: {r.get('reason', '')[:60]}")
+                print(f"  {icon} [{r['verdict']}] {source}: {r.get('reason', '')[:80]}")
         except Exception as e:
             print(f"  ✗ [{source}] 跳过 ({e})")
 
-    # 5. 保存结果
+    # 5. 保存结果（不含原文引用，仅有判断结论）
     out = {
         "verified_at": __import__("datetime").datetime.now().isoformat(),
-        "assumptions": assertions,
-        "plan": plan,
+        "fact_sources": [
+            {"label": s["label"], "private": s["private"]} for s in active
+        ],
+        "assertions": assertions,
         "results": results,
         "summary": {
             "total": len(assertions),
@@ -222,9 +258,7 @@ def cmd_status():
         }.get(r.get("verdict", ""), "?")
         print(f"  {icon} [{r['verdict']}] {r['source']}")
         print(f"     断言: {r['assertion'][:60]}...")
-        print(f"     判断: {r.get('reason', '')[:60]}")
-        if r.get("found_in"):
-            print(f"     来源: {', '.join(r['found_in'][:2])}")
+        print(f"     判断: {r.get('reason', '')[:80]}")
         print()
 
     s = data.get("summary", {})
@@ -233,17 +267,31 @@ def cmd_status():
     )
 
 
+def cmd_sources():
+    """查看事实源配置"""
+    sources = _load_fact_sources()
+    if not sources:
+        return
+    print(f"\n事实源清单 ({FACT_SOURCES_PATH}):\n")
+    for s in sources:
+        status = "✓" if s["path"].exists() else "✗"
+        priv = "🔒" if s["private"] else "  "
+        print(f"  {status} {priv} {s['label']}")
+        print(f"       {s['path']}")
+
+
 def cmd_help():
     print("""QT Strategy Lab
 
 读 profile/ 里的战略断言 → 生成核验清单 → 到外部事实源（journal）找证据。
 
-用法: python -m qt_strategy_lab <命令>
+用法: python -m qt_strategy_lab <命令> [选项]
 
 命令:
-  verify    读 profile/ 所有断言，生成核验清单，到外部找证据
-  status    查看上次核验结果
-  help      显示帮助
+  verify [--public-only]  核验，--public-only 跳过私有事实源
+  status                  查看上次核验结果
+  sources                 查看事实源配置
+  help                    显示帮助
 """)
 
 
@@ -254,9 +302,12 @@ def main():
 
     cmd = sys.argv[1]
     if cmd == "verify":
-        cmd_verify()
+        public_only = "--public-only" in sys.argv
+        cmd_verify(public_only=public_only)
     elif cmd == "status":
         cmd_status()
+    elif cmd == "sources":
+        cmd_sources()
     elif cmd == "reset":
         import shutil
 

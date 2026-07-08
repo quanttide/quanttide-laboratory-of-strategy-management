@@ -1,0 +1,5 @@
+[
+  {"label": "本仓库-journal", "path": "../../../data/journal", "private": false},
+  {"label": "外部-quanttide-tech", "path": "../../../default/quanttide-tech/data/journal", "private": false},
+  {"label": "浙理课堂", "path": "../../../quanttide-tech-private/data/qtclass-private/assets/qtclass-zstu", "private": true}
+]
