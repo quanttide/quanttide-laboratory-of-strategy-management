@@ -24,19 +24,29 @@ PROFILE_STRATEGY = QT_ROOT / "data" / "profile" / "strategy" / "index.json"
 PROFILE_ENV = QT_ROOT / "data" / "profile" / "environment" / "index.json"
 
 # 事实源配置（从文件读，不硬编码）
-FACT_SOURCES_PATH = Path(__file__).resolve().parent.parent.parent / "fact_sources.json"
+CONFIG_DIR = Path(__file__).resolve().parent.parent.parent
+FACT_SOURCES_TEMPLATE = CONFIG_DIR / "fact_sources.template.json"
+FACT_SOURCES_LOCAL = CONFIG_DIR / "fact_sources.local.json"
 
 
 def _load_fact_sources() -> list[dict]:
-    """从配置文件读事实源清单"""
-    if not FACT_SOURCES_PATH.exists():
-        print(f"事实源配置文件不存在: {FACT_SOURCES_PATH}")
+    """合并公开模板 + 本地私有配置"""
+    template_path = FACT_SOURCES_TEMPLATE
+    local_path = FACT_SOURCES_LOCAL
+
+    all_items = []
+    if template_path.exists():
+        all_items.extend(json.loads(template_path.read_text()))
+    if local_path.exists():
+        all_items.extend(json.loads(local_path.read_text()))
+
+    if not all_items:
+        print(f"无事实源配置（模板: {template_path}）")
         return []
-    raw = json.loads(FACT_SOURCES_PATH.read_text())
+
     sources = []
-    for item in raw:
-        # 路径相对于配置文件所在目录解析
-        ref = FACT_SOURCES_PATH.parent / item["path"]
+    for item in all_items:
+        ref = CONFIG_DIR / item["path"]
         resolved = ref.resolve() if ref.exists() else ref
         sources.append(
             {
@@ -272,7 +282,12 @@ def cmd_sources():
     sources = _load_fact_sources()
     if not sources:
         return
-    print(f"\n事实源清单 ({FACT_SOURCES_PATH}):\n")
+    print(f"\n事实源配置:")
+    print(f"  公开模板: {FACT_SOURCES_TEMPLATE}")
+    print(
+        f"  本地私有: {FACT_SOURCES_LOCAL} {'(存在)' if FACT_SOURCES_LOCAL.exists() else '(不存在)'}"
+    )
+    print()
     for s in sources:
         status = "✓" if s["path"].exists() else "✗"
         priv = "🔒" if s["private"] else "  "
