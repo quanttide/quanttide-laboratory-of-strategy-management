@@ -1,0 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qt-strategy-lab"
+version = "0.1.0"
+description = "战略假设推演实验室 — 实验 DoWhy 式假设管理 + 反事实校验"
+requires-python = ">=3.11"
+dependencies = []
